@@ -10,7 +10,8 @@
 
 You could do
 
-```wget https://raw.githubusercontent.com/dobriak/k8saposetup/master/k8saposetup.sh
+```
+wget https://raw.githubusercontent.com/dobriak/k8saposetup/master/k8saposetup.sh
 chmod +x k8saposetup.sh
 # Inspect, ie 'vim k8saposetup.sh'
 # Pass overrides with 'export VAR=value'
