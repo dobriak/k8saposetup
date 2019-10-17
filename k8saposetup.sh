@@ -29,8 +29,11 @@ check_prereqs() {
 
 install_apoctl () {
   echo "> Installing apoctl"
-  sudo curl -sSL ${aporeto_bin_url} -o /usr/local/bin/apoctl
-  sudo chmod +x /usr/local/bin/apoctl
+  echo "You might be asked for your supeuser password in order to place "
+  echo "the apoctl executable in /usr/local/bin"
+  curl -sSL ${aporeto_bin_url} -o apoctl
+  chmod +x apoctl
+  sudo mv apoctl /usr/local/bin/
 }
 
 authenticate () {
