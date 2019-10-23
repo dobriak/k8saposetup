@@ -4,6 +4,7 @@
 APORETO_RELEASE=${APORETO_RELEASE:-"release-3.11.15"}
 CLUSTER_NAME=${CLUSTER_NAME:-"mycluster1"}
 DEFAULT_API_URL="https://api.console.aporeto.com"
+USE_TILLER=${USE_TILLER:-true}
 PLATFORM=$(uname | tr '[:upper:]' '[:lower:]')
 
 aporeto_bin_url="https://download.aporeto.com/releases/${APORETO_RELEASE}/apoctl/${PLATFORM}/apoctl"
@@ -206,13 +207,6 @@ EOF
 }
 
 prepare_k8s () {
-  echo "> Creating tiller account and initializing helm"
-  create_tiller
-  helm init --service-account tiller --upgrade --wait
-
-  echo "> Adding Aporeto's helm repository"
-  helm repo add aporeto ${aporeto_helm_url}
-
   echo "> Creating enforcer profile in Aporeto that will ignore loopback traffic, allowing sidecar containers to communicate with each other"
   create_enforcer_profile
 
@@ -229,13 +223,52 @@ prepare_k8s () {
   kubectl -n aporeto-operator get secrets | grep Opaque
   kubectl -n aporeto get secrets | grep Opaque
 
-  echo "> Deploying the Aporeto Operator"
-  helm install aporeto/aporeto-crds --name aporeto-crds --wait
-  helm install aporeto/aporeto-operator --name aporeto-operator --namespace aporeto-operator --wait
-  kubectl get pods -n aporeto-operator
+  if [ ${USE_TILLER} = true ]; then
+    echo "> Creating tiller account and initializing helm"
+    create_tiller
+    helm init --service-account tiller --upgrade --wait
 
-  echo "> Installing the enforcer and verifying it"
-  helm install aporeto/enforcerd --name enforcerd --namespace aporeto --wait
+    echo "> Adding Aporeto's helm repository"
+    helm repo add aporeto ${aporeto_helm_url}
+
+    echo "> Deploying the Aporeto Operator"
+    helm install aporeto/aporeto-crds --name aporeto-crds --wait
+    helm install aporeto/aporeto-operator --name aporeto-operator --namespace aporeto-operator --wait
+    kubectl get pods -n aporeto-operator
+
+    echo "> Installing the enforcer and verifying it"
+    helm install aporeto/enforcerd --name enforcerd --namespace aporeto --wait
+  else
+    echo "Initializing client only mode for helm"
+    helm init --client-only --upgrade --wait
+
+    echo "> Adding Aporeto's helm repository"
+    helm repo add aporeto ${aporeto_helm_url}
+    for d in charts values manifests; do
+      [ -d ${d} ] && rm -rf ${d}
+      mkdir ${d}
+    done
+    # Fetch charts
+    helm fetch --untar --untardir charts/ aporeto/aporeto-crds
+    helm fetch --untar --untardir charts/ aporeto/aporeto-operator
+    helm fetch --untar --untardir charts/ aporeto/enforcerd
+    cp charts/aporeto-operator/values.yaml values/aporeto-operator.yaml
+    cp charts/enforcerd/values.yaml values/enforcerd.yaml
+    # Render charts
+    helm template  --output-dir manifests/ --name aporeto-crds --namespace default charts/aporeto-crds
+    helm template  --output-dir manifests/ --name aporeto-operator --namespace aporeto-operator charts/aporeto-operator
+    helm template  --output-dir manifests/ --name enforcerd --namespace aporeto charts/enforcerd
+    # Apply rendered charts
+    kubectl apply --recursive -f manifests/aporeto-crds
+    kubectl get -n default crds
+    kubectl apply --namespace aporeto-operator -f manifests/aporeto-operator/templates/pre-install.yaml
+    for m in deployment rbac post-delete; do
+      kubectl apply --namespace aporeto-operator -f manifests/aporeto-operator/templates/${m}.yaml
+    done
+    kubectl get pods --namespace aporeto-operator
+    kubectl apply --namespace aporeto --recursive -f manifests/enforcerd
+    kubectl get ds -n aporeto
+  fi
   kubectl get pods --all-namespaces | grep aporeto
   apoctl api list enforcers --namespace ${APOCTL_NAMESPACE} -c ID -c name -c namespace -c operationalStatus
 }

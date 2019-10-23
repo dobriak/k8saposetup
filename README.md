@@ -5,6 +5,7 @@
 *Overrides*
 * APORETO_RELEASE="release-3.11.15"
 * CLUSTER_NAME="mycluster1"
+* USE_TILLER=true
 
 ### Usage
 
