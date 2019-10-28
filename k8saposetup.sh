@@ -11,21 +11,30 @@ aporeto_bin_url="https://download.aporeto.com/releases/${APORETO_RELEASE}/apoctl
 aporeto_helm_url="https://charts.aporeto.com/releases/${APORETO_RELEASE}/clients"
 
 check_prereqs() {
+  local quit=false
   echo "> Checking prerequisites"
-  for p in curl kubectl helm; do
+  for p in yq curl kubectl helm; do
     if ! command -v ${p}; then
       echo >&2 "Please install ${p}"
-      exit 1
+      quit=true
     fi
   done
   if ! kubectl cluster-info ; then
     echo >&2 "Please configure kubectl for your Kubernetes cluster"
-    exit 1
+    quit=true
   fi
+  [ ${quit} = true ] && exit 1
   if ! command -v apoctl ; then
     echo >&2 "Could not find apoctl"
     install_apoctl
   fi
+  kver_min=$(kubectl version -o yaml | yq r - serverVersion.minor)
+  kver_maj=$(kubectl version -o yaml | yq r - serverVersion.major)
+  if ((kver_maj != 1 || kver_min < 11)); then
+    echo "Unsupported version of Kubernetes ${kver_maj}.${kver_min}"
+    exit 1
+  fi
+
 }
 
 install_apoctl () {
@@ -258,6 +267,17 @@ prepare_k8s () {
     helm template  --output-dir manifests/ --name aporeto-crds --namespace default charts/aporeto-crds
     helm template  --output-dir manifests/ --name aporeto-operator --namespace aporeto-operator charts/aporeto-operator
     helm template  --output-dir manifests/ --name enforcerd --namespace aporeto charts/enforcerd
+    # Kubernetes 1.16 graduated DS API from beta to stable
+    if ((kver_min > 15)); then
+      local ds="manifests/enforcerd/templates/ds.yaml"
+      if [ $(yq r ${ds} apiVersion) = "extensions/v1beta1" ]; then
+        echo "Adjusting manifests for Kubernetes ${kver_maj}.${kver_min}"
+        yq w -i ${ds} apiVersion apps/v1
+        yq w -i ${ds} spec.selector.matchLabels.app enforcerd
+        yq w -i ${ds} spec.selector.matchLabels.type aporeto
+      fi
+    fi
+
     # Apply rendered charts
     kubectl apply --recursive -f manifests/aporeto-crds
     kubectl get -n default crds
@@ -265,9 +285,9 @@ prepare_k8s () {
     for m in deployment rbac post-delete; do
       kubectl apply --namespace aporeto-operator -f manifests/aporeto-operator/templates/${m}.yaml
     done
-    kubectl get pods --namespace aporeto-operator
+    #kubectl wait -f manifests/aporeto-operator/templates/deployment.yaml --for condition=available
     kubectl apply --namespace aporeto --recursive -f manifests/enforcerd
-    kubectl get ds -n aporeto
+    kubectl wait -f manifests/enforcerd/templates/ds.yaml --for condition=available
   fi
   kubectl get pods --all-namespaces | grep aporeto
   apoctl api list enforcers --namespace ${APOCTL_NAMESPACE} -c ID -c name -c namespace -c operationalStatus
